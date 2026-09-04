@@ -58,6 +58,11 @@ static void ota_app_upload_progress(
         (unsigned int)bytes_sent,
         (unsigned int)total_bytes
     );
+
+    oled_show_upload_progress(
+        bytes_sent,
+        total_bytes
+    );
 }
 
 void ota_app_start(void)
@@ -196,6 +201,8 @@ void ota_app_start(void)
      * through the storage interface.
      */
     firmware_storage_release(&image);
+
+    oled_show_upload_complete();
 
     buzzer_success();
 
