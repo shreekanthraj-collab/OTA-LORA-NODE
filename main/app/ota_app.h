@@ -1,6 +1,6 @@
 /**
  * @file ota_app.h
- * @brief ORB DRIVE OTA module application interface.
+ * @brief ORB DRIVE OTA module application controller.
  */
 
 #ifndef OTA_APP_H
@@ -10,6 +10,9 @@
 extern "C" {
 #endif
 
+/**
+ * @brief Initialize and start the OTA module application.
+ */
 void ota_app_start(void);
 
 #ifdef __cplusplus
