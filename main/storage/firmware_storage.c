@@ -1,8 +1,6 @@
 /**
  * @file firmware_storage.c
  * @brief ORB DRIVE OTA module firmware storage manager.
- *
- * Hardware source is intentionally not selected yet.
  */
 
 #include "firmware_storage.h"
@@ -13,13 +11,13 @@ static const char *TAG = "FW_STORAGE";
 
 static bool s_initialized = false;
 
-firmware_storage_status_t firmware_storage_init(void)
+bool firmware_storage_init(void)
 {
-    /*
-     * The physical firmware source has not yet been frozen.
-     *
-     * This layer therefore performs no hardware access.
-     */
+    if (s_initialized)
+    {
+        return true;
+    }
+
     s_initialized = true;
 
     ESP_LOGI(
@@ -27,54 +25,82 @@ firmware_storage_status_t firmware_storage_init(void)
         "Firmware storage manager initialized"
     );
 
-    return FIRMWARE_STORAGE_OK;
+    return true;
 }
 
-bool firmware_storage_is_available(void)
+bool firmware_storage_available(void)
 {
+    if (!s_initialized)
+    {
+        ESP_LOGE(
+            TAG,
+            "Firmware storage not initialized"
+        );
+
+        return false;
+    }
+
     /*
-     * No physical firmware source is implemented yet.
+     * Firmware source is not yet frozen.
+     *
+     * Do not report a firmware image as available
+     * until the actual storage/source implementation
+     * is defined.
      */
     return false;
 }
 
-firmware_storage_status_t firmware_storage_get_size(
-    size_t *size)
+bool firmware_storage_get_image(
+    firmware_image_t *image)
 {
+    if (image == NULL)
+    {
+        ESP_LOGE(
+            TAG,
+            "Invalid firmware image descriptor"
+        );
+
+        return false;
+    }
+
+    image->data = NULL;
+    image->size = 0U;
+
     if (!s_initialized)
     {
-        return FIRMWARE_STORAGE_NOT_INITIALIZED;
+        ESP_LOGE(
+            TAG,
+            "Firmware storage not initialized"
+        );
+
+        return false;
     }
 
-    if (size == NULL)
+    if (!firmware_storage_available())
     {
-        return FIRMWARE_STORAGE_INVALID;
+        ESP_LOGW(
+            TAG,
+            "No firmware image available"
+        );
+
+        return false;
     }
 
-    *size = 0U;
-
-    return FIRMWARE_STORAGE_NOT_AVAILABLE;
+    return true;
 }
 
-firmware_storage_status_t firmware_storage_read(
-    size_t offset,
-    uint8_t *buffer,
-    size_t length)
+void firmware_storage_release(
+    firmware_image_t *image)
 {
-    (void)offset;
-
-    if (!s_initialized)
+    if (image == NULL)
     {
-        return FIRMWARE_STORAGE_NOT_INITIALIZED;
-    }
-
-    if ((buffer == NULL) && (length > 0U))
-    {
-        return FIRMWARE_STORAGE_INVALID;
+        return;
     }
 
     /*
-     * No physical firmware source is implemented yet.
+     * Current implementation does not allocate
+     * or own any firmware buffer.
      */
-    return FIRMWARE_STORAGE_NOT_AVAILABLE;
+    image->data = NULL;
+    image->size = 0U;
 }

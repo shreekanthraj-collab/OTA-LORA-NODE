@@ -14,64 +14,50 @@ extern "C" {
 #include <stddef.h>
 #include <stdint.h>
 
-/* ============================================================
- * Firmware storage status
- * ============================================================ */
-
-typedef enum
+/**
+ * @brief Firmware image descriptor.
+ */
+typedef struct
 {
-    FIRMWARE_STORAGE_OK = 0,
-    FIRMWARE_STORAGE_NOT_INITIALIZED,
-    FIRMWARE_STORAGE_NOT_AVAILABLE,
-    FIRMWARE_STORAGE_INVALID,
-    FIRMWARE_STORAGE_READ_ERROR
-} firmware_storage_status_t;
+    const uint8_t *data;
+    size_t size;
+} firmware_image_t;
 
-/* ============================================================
- * Initialization
- * ============================================================ */
-
-firmware_storage_status_t firmware_storage_init(void);
-
-/* ============================================================
- * Firmware information
- * ============================================================ */
+/**
+ * @brief Initialize firmware storage.
+ *
+ * @return true when the storage layer is ready.
+ */
+bool firmware_storage_init(void);
 
 /**
  * @brief Check whether a firmware image is available.
  *
- * @return true if firmware is available, otherwise false.
+ * @return true when a valid firmware image is available.
  */
-bool firmware_storage_is_available(void);
+bool firmware_storage_available(void);
 
 /**
- * @brief Get the firmware image size.
+ * @brief Get the firmware image.
  *
- * @param size Output firmware size in bytes.
+ * @param image Output firmware image descriptor.
  *
- * @return FIRMWARE_STORAGE_OK on success.
+ * @return true when a valid firmware image is available.
  */
-firmware_storage_status_t firmware_storage_get_size(
-    size_t *size
+bool firmware_storage_get_image(
+    firmware_image_t *image
 );
 
-/* ============================================================
- * Firmware read
- * ============================================================ */
-
 /**
- * @brief Read firmware data from the storage source.
+ * @brief Release the firmware image.
  *
- * @param offset Offset into firmware image.
- * @param buffer Destination buffer.
- * @param length Number of bytes to read.
+ * This allows the storage implementation to release
+ * any resources associated with the image.
  *
- * @return FIRMWARE_STORAGE_OK on success.
+ * @param image Firmware image descriptor.
  */
-firmware_storage_status_t firmware_storage_read(
-    size_t offset,
-    uint8_t *buffer,
-    size_t length
+void firmware_storage_release(
+    firmware_image_t *image
 );
 
 #ifdef __cplusplus
