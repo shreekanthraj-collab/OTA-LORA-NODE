@@ -1,22 +1,12 @@
 /**
  * @file wifi_manager.c
  * @brief ORB DRIVE OTA module Wi-Fi station manager.
- *
- * The OTA module joins the Node-created Wi-Fi AP.
- *
- * Frozen Node interface:
- *
- * SSID       : lora-node
- * PASSWORD   : node@1234
- * CHANNEL    : 1
- * MAX CLIENT : 1
- * NODE IP    : 192.168.4.1
  */
 
 #include "wifi_manager.h"
 
+#include <stdio.h>
 #include <string.h>
-#include <stdlib.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
@@ -25,24 +15,32 @@
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
-#include "esp_err.h"
+
+#include "lwip/inet.h"
+#include "lwip/ip4_addr.h"
+#include "lwip/sockets.h"
 
 #include "ota_hw_config.h"
 
 static const char *TAG = "WIFI_MANAGER";
 
-#define WIFI_CONNECTED_BIT BIT0
-#define WIFI_FAIL_BIT      BIT1
+#define WIFI_CONNECTED_BIT    BIT0
+#define WIFI_FAIL_BIT         BIT1
 
-#define WIFI_MAX_RETRY     10
+#define WIFI_MAX_RETRY        5U
+#define WIFI_SCAN_TIMEOUT_MS  5000
 
-static EventGroupHandle_t s_wifi_event_group;
+static EventGroupHandle_t s_wifi_event_group = NULL;
 
 static esp_netif_t *s_sta_netif = NULL;
 
-static int s_retry_count = 0;
+static uint8_t s_retry_count = 0U;
 
 static bool s_initialized = false;
+static bool s_node_found = false;
+static bool s_connected = false;
+
+static char s_local_ip[16] = "0.0.0.0";
 
 static void wifi_event_handler(
     void *arg,
@@ -55,66 +53,73 @@ static void wifi_event_handler(
 
     if (event_base == WIFI_EVENT)
     {
-        if (event_id == WIFI_EVENT_STA_START)
+        switch (event_id)
         {
-            ESP_LOGI(TAG, "Wi-Fi STA started");
-
-            esp_wifi_connect();
-        }
-        else if (event_id == WIFI_EVENT_STA_DISCONNECTED)
-        {
-            if (s_retry_count < WIFI_MAX_RETRY)
-            {
-                s_retry_count++;
-
-                ESP_LOGW(
+            case WIFI_EVENT_STA_START:
+                ESP_LOGI(
                     TAG,
-                    "Node AP connection retry %d/%d",
-                    s_retry_count,
-                    WIFI_MAX_RETRY
+                    "Wi-Fi station started"
                 );
 
                 esp_wifi_connect();
-            }
-            else
-            {
-                ESP_LOGE(
-                    TAG,
-                    "Failed to connect to Node AP"
-                );
+                break;
 
-                xEventGroupSetBits(
-                    s_wifi_event_group,
-                    WIFI_FAIL_BIT
-                );
-            }
+            case WIFI_EVENT_STA_DISCONNECTED:
+                s_connected = false;
+
+                if (s_retry_count < WIFI_MAX_RETRY)
+                {
+                    s_retry_count++;
+
+                    ESP_LOGW(
+                        TAG,
+                        "Wi-Fi disconnected, retry %u/%u",
+                        (unsigned int)s_retry_count,
+                        (unsigned int)WIFI_MAX_RETRY
+                    );
+
+                    esp_wifi_connect();
+                }
+                else
+                {
+                    xEventGroupSetBits(
+                        s_wifi_event_group,
+                        WIFI_FAIL_BIT
+                    );
+                }
+
+                break;
+
+            default:
+                break;
         }
     }
-    else if (event_base == IP_EVENT)
+    else if (event_base == IP_EVENT &&
+             event_id == IP_EVENT_STA_GOT_IP)
     {
-        if (event_id == IP_EVENT_STA_GOT_IP)
-        {
-            ip_event_got_ip_t *event =
-                (ip_event_got_ip_t *)event_data;
+        ip_event_got_ip_t *event =
+            (ip_event_got_ip_t *)event_data;
 
-            ESP_LOGI(
-                TAG,
-                "Node connection established"
-            );
+        snprintf(
+            s_local_ip,
+            sizeof(s_local_ip),
+            IPSTR,
+            IP2STR(&event->ip_info.ip)
+        );
 
-            ESP_LOGI(
-                TAG,
-                "Assigned IP: " IPSTR,
-                IP2STR(&event->ip_info.ip)
-            );
+        s_retry_count = 0U;
+        s_connected = true;
 
-            s_retry_count = 0;
+        ESP_LOGI(
+            TAG,
+            "Connected, local IP: %s",
+            s_local_ip
+        );
 
-            xEventGroupSetBits(
-                s_wifi_event_group,
-                WIFI_CONNECTED_BIT
-            );
-        }
+        xEventGroupSetBits(
+            s_wifi_event_group,
+            WIFI_CONNECTED_BIT
+        );
     }
 }
 
@@ -133,26 +138,38 @@ void wifi_manager_init(void)
         esp_event_loop_create_default()
     );
 
-    s_sta_netif = esp_netif_create_default_wifi_sta();
+    s_sta_netif =
+        esp_netif_create_default_wifi_sta();
 
     if (s_sta_netif == NULL)
     {
         ESP_LOGE(
             TAG,
-            "Failed to create Wi-Fi STA network interface"
+            "Failed to create STA network interface"
         );
 
         return;
     }
 
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    wifi_init_config_t wifi_config =
+        WIFI_INIT_CONFIG_DEFAULT();
 
     ESP_ERROR_CHECK(
-        esp_wifi_init(&cfg)
+        esp_wifi_init(&wifi_config)
     );
 
     s_wifi_event_group =
         xEventGroupCreate();
+
+    if (s_wifi_event_group == NULL)
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to create Wi-Fi event group"
+        );
+
+        return;
+    }
 
     ESP_ERROR_CHECK(
         esp_event_handler_register(
@@ -176,6 +193,10 @@ void wifi_manager_init(void)
         esp_wifi_set_mode(WIFI_MODE_STA)
     );
 
+    ESP_ERROR_CHECK(
+        esp_wifi_start()
+    );
+
     s_initialized = true;
 
     ESP_LOGI(
@@ -184,7 +205,7 @@ void wifi_manager_init(void)
     );
 }
 
-bool wifi_manager_scan_node(void)
+bool wifi_manager_find_node(void)
 {
     if (!s_initialized)
     {
@@ -196,53 +217,23 @@ bool wifi_manager_scan_node(void)
         return false;
     }
 
+    wifi_scan_config_t scan_config = {
+        .ssid = (uint8_t *)OTA_WIFI_AP_SSID,
+        .bssid = NULL,
+        .channel = 0,
+        .show_hidden = true,
+        .scan_type = WIFI_SCAN_TYPE_ACTIVE,
+        .scan_time.active.min = 100,
+        .scan_time.active.max = 300,
+    };
+
     ESP_LOGI(
         TAG,
         "Scanning for Node AP: %s",
         OTA_WIFI_AP_SSID
     );
 
-    wifi_scan_config_t scan_config = {
-        .ssid = (uint8_t *)OTA_WIFI_AP_SSID,
-        .bssid = NULL,
-        .channel = OTA_WIFI_CHANNEL,
-        .show_hidden = false,
-        .scan_type = WIFI_SCAN_TYPE_ACTIVE,
-        .scan_time.active.min = 100,
-        .scan_time.active.max = 300,
-        .home_chan_dwell_time = 30,
-    };
-
     esp_err_t err =
-        esp_wifi_set_mode(WIFI_MODE_STA);
-
-    if (err != ESP_OK)
-    {
-        ESP_LOGE(
-            TAG,
-            "Failed to set STA mode: %s",
-            esp_err_to_name(err)
-        );
-
-        return false;
-    }
-
-    err =
-        esp_wifi_start();
-
-    if (err != ESP_OK &&
-        err != ESP_ERR_INVALID_STATE)
-    {
-        ESP_LOGE(
-            TAG,
-            "Failed to start Wi-Fi: %s",
-            esp_err_to_name(err)
-        );
-
-        return false;
-    }
-
-    err =
         esp_wifi_scan_start(
             &scan_config,
             true
@@ -256,10 +247,12 @@ bool wifi_manager_scan_node(void)
             esp_err_to_name(err)
         );
 
+        s_node_found = false;
+
         return false;
     }
 
-    uint16_t ap_count = 0;
+    uint16_t ap_count = 0U;
 
     err =
         esp_wifi_scan_get_ap_num(
@@ -270,24 +263,23 @@ bool wifi_manager_scan_node(void)
     {
         ESP_LOGE(
             TAG,
-            "Failed to get AP count"
+            "Failed to get scan count: %s",
+            esp_err_to_name(err)
         );
+
+        s_node_found = false;
 
         return false;
     }
 
-    ESP_LOGI(
-        TAG,
-        "Wi-Fi scan found %u AP(s)",
-        ap_count
-    );
-
-    if (ap_count == 0)
+    if (ap_count == 0U)
     {
         ESP_LOGW(
             TAG,
-            "Node AP not found"
+            "No Wi-Fi networks found"
         );
+
+        s_node_found = false;
 
         return false;
     }
@@ -305,6 +297,8 @@ bool wifi_manager_scan_node(void)
             "Unable to allocate scan records"
         );
 
+        s_node_found = false;
+
         return false;
     }
 
@@ -320,50 +314,61 @@ bool wifi_manager_scan_node(void)
     {
         ESP_LOGE(
             TAG,
-            "Failed to read scan results"
+            "Failed to read scan records: %s",
+            esp_err_to_name(err)
         );
 
         free(records);
 
+        s_node_found = false;
+
         return false;
     }
 
-    bool node_found = false;
+    s_node_found = false;
 
-    for (uint16_t i = 0; i < record_count; i++)
+    for (uint16_t i = 0U; i < record_count; i++)
     {
         if (strcmp(
-                (char *)records[i].ssid,
-                OTA_WIFI_AP_SSID
-            ) == 0)
+                (const char *)records[i].ssid,
+                OTA_WIFI_AP_SSID) == 0)
         {
             ESP_LOGI(
                 TAG,
-                "NODE FOUND: %s",
-                OTA_WIFI_AP_SSID
+                "Node AP found: %s",
+                records[i].ssid
             );
 
             ESP_LOGI(
                 TAG,
-                "Channel: %d",
-                records[i].primary
+                "Channel: %u RSSI: %d",
+                (unsigned int)records[i].primary,
+                (int)records[i].rssi
             );
 
-            ESP_LOGI(
+            if (records[i].primary == OTA_WIFI_CHANNEL)
+            {
+                s_node_found = true;
+
+                ESP_LOGI(
+                    TAG,
+                    "Node AP channel verified: %u",
+                    (unsigned int)OTA_WIFI_CHANNEL
+                );
+
+                break;
+            }
+
+            ESP_LOGW(
                 TAG,
-                "RSSI: %d dBm",
-                records[i].rssi
+                "SSID found but channel mismatch"
             );
-
-            node_found = true;
-
-            break;
         }
     }
 
     free(records);
 
-    return node_found;
+    return s_node_found;
 }
 
 bool wifi_manager_connect(void)
@@ -378,41 +383,50 @@ bool wifi_manager_connect(void)
         return false;
     }
 
-    wifi_config_t wifi_config = {0};
+    if (!s_node_found)
+    {
+        ESP_LOGW(
+            TAG,
+            "Node AP has not been found"
+        );
+
+        return false;
+    }
+
+    wifi_config_t config = {0};
 
     strncpy(
-        (char *)wifi_config.sta.ssid,
+        (char *)config.sta.ssid,
         OTA_WIFI_AP_SSID,
-        sizeof(wifi_config.sta.ssid) - 1
+        sizeof(config.sta.ssid) - 1U
     );
 
     strncpy(
-        (char *)wifi_config.sta.password,
+        (char *)config.sta.password,
         OTA_WIFI_AP_PASSWORD,
-        sizeof(wifi_config.sta.password) - 1
+        sizeof(config.sta.password) - 1U
     );
 
-    wifi_config.sta.channel = OTA_WIFI_CHANNEL;
+    config.sta.scan_method =
+        WIFI_ALL_CHANNEL_SCAN;
 
-    wifi_config.sta.scan_method =
-        WIFI_FAST_SCAN;
-
-    wifi_config.sta.sort_method =
+    config.sta.sort_method =
         WIFI_CONNECT_AP_BY_SIGNAL;
 
-    ESP_ERROR_CHECK(
-        esp_wifi_set_config(
-            WIFI_IF_STA,
-            &wifi_config
-        )
-    );
-
-    s_retry_count = 0;
+    s_retry_count = 0U;
+    s_connected = false;
 
     xEventGroupClearBits(
         s_wifi_event_group,
         WIFI_CONNECTED_BIT |
         WIFI_FAIL_BIT
+    );
+
+    ESP_ERROR_CHECK(
+        esp_wifi_set_config(
+            WIFI_IF_STA,
+            &config
+        )
     );
 
     ESP_LOGI(
@@ -422,29 +436,13 @@ bool wifi_manager_connect(void)
     );
 
     esp_err_t err =
-        esp_wifi_start();
-
-    if (err != ESP_OK &&
-        err != ESP_ERR_INVALID_STATE)
-    {
-        ESP_LOGE(
-            TAG,
-            "Wi-Fi start failed: %s",
-            esp_err_to_name(err)
-        );
-
-        return false;
-    }
-
-    err =
         esp_wifi_connect();
 
-    if (err != ESP_OK &&
-        err != ESP_ERR_INVALID_STATE)
+    if (err != ESP_OK)
     {
         ESP_LOGE(
             TAG,
-            "Wi-Fi connect failed: %s",
+            "esp_wifi_connect failed: %s",
             esp_err_to_name(err)
         );
 
@@ -458,14 +456,16 @@ bool wifi_manager_connect(void)
             WIFI_FAIL_BIT,
             pdFALSE,
             pdFALSE,
-            pdMS_TO_TICKS(15000)
+            pdMS_TO_TICKS(
+                WIFI_SCAN_TIMEOUT_MS
+            )
         );
 
-    if (bits & WIFI_CONNECTED_BIT)
+    if ((bits & WIFI_CONNECTED_BIT) != 0)
     {
         ESP_LOGI(
             TAG,
-            "NODE CONNECTED"
+            "Node Wi-Fi connection established"
         );
 
         return true;
@@ -473,7 +473,7 @@ bool wifi_manager_connect(void)
 
     ESP_LOGE(
         TAG,
-        "NODE CONNECTION FAILED"
+        "Node Wi-Fi connection failed"
     );
 
     return false;
@@ -481,15 +481,112 @@ bool wifi_manager_connect(void)
 
 bool wifi_manager_is_connected(void)
 {
-    if (!s_initialized)
+    return s_connected;
+}
+
+const char *wifi_manager_get_local_ip(void)
+{
+    return s_local_ip;
+}
+
+bool wifi_manager_node_reachable(void)
+{
+    if (!s_connected)
     {
+        ESP_LOGW(
+            TAG,
+            "Node reachability check skipped: not connected"
+        );
+
         return false;
     }
 
-    EventBits_t bits =
-        xEventGroupGetBits(
-            s_wifi_event_group
+    struct sockaddr_in address;
+
+    memset(
+        &address,
+        0,
+        sizeof(address)
+    );
+
+    address.sin_family = AF_INET;
+    address.sin_port = htons(80);
+
+    if (inet_pton(
+            AF_INET,
+            OTA_NODE_IP,
+            &address.sin_addr) != 1)
+    {
+        ESP_LOGE(
+            TAG,
+            "Invalid Node IP address"
         );
 
-    return (bits & WIFI_CONNECTED_BIT) != 0;
+        return false;
+    }
+
+    int socket_fd =
+        socket(
+            AF_INET,
+            SOCK_STREAM,
+            IPPROTO_IP
+        );
+
+    if (socket_fd < 0)
+    {
+        ESP_LOGE(
+            TAG,
+            "Unable to create TCP socket"
+        );
+
+        return false;
+    }
+
+    struct timeval timeout = {
+        .tv_sec = 2,
+        .tv_usec = 0
+    };
+
+    setsockopt(
+        socket_fd,
+        SOL_SOCKET,
+        SO_SNDTIMEO,
+        &timeout,
+        sizeof(timeout)
+    );
+
+    setsockopt(
+        socket_fd,
+        SOL_SOCKET,
+        SO_RCVTIMEO,
+        &timeout,
+        sizeof(timeout)
+    );
+
+    int result =
+        connect(
+            socket_fd,
+            (struct sockaddr *)&address,
+            sizeof(address)
+        );
+
+    close(socket_fd);
+
+    if (result == 0)
+    {
+        ESP_LOGI(
+            TAG,
+            "Node reachable at %s",
+            OTA_NODE_IP
+        );
+
+        return true;
+    }
+
+    ESP_LOGW(
+        TAG,
+        "Node TCP connection failed"
+    );
+
+    return false;
 }

@@ -1,6 +1,6 @@
 /**
  * @file oled.h
- * @brief ORB DRIVE OTA module OLED display interface.
+ * @brief ORB DRIVE OTA module SSD1306 OLED interface.
  */
 
 #ifndef OTA_OLED_H
