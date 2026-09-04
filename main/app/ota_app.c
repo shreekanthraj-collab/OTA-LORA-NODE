@@ -9,10 +9,10 @@
 
 #include "buttons.h"
 #include "buzzer.h"
-#include "firmware_storage.h"
 #include "oled.h"
 #include "ota_manager.h"
 #include "wifi_manager.h"
+#include "firmware_storage.h"
 
 static const char *TAG = "OTA_APP";
 
@@ -27,6 +27,37 @@ static void ota_app_show_failure(
 
     oled_show_failure(reason);
     buzzer_error();
+}
+
+static void ota_app_upload_progress(
+    size_t bytes_sent,
+    size_t total_bytes,
+    void *context)
+{
+    (void)context;
+
+    if (total_bytes == 0U)
+    {
+        return;
+    }
+
+    unsigned int percent =
+        (unsigned int)(
+            (bytes_sent * 100U) / total_bytes
+        );
+
+    if (percent > 100U)
+    {
+        percent = 100U;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "OTA upload progress: %u%% (%u/%u)",
+        percent,
+        (unsigned int)bytes_sent,
+        (unsigned int)total_bytes
+    );
 }
 
 void ota_app_start(void)
@@ -109,7 +140,8 @@ void ota_app_start(void)
     }
 
     /*
-     * Check whether a firmware image is available.
+     * Check whether the embedded Node firmware
+     * is available.
      */
     if (!firmware_storage_available())
     {
@@ -120,19 +152,60 @@ void ota_app_start(void)
         return;
     }
 
+    /*
+     * Obtain the embedded Node firmware image.
+     */
+    firmware_image_t image;
+
+    if (!firmware_storage_get_image(&image))
+    {
+        ota_app_show_failure(
+            "FIRMWARE LOAD FAILED"
+        );
+
+        return;
+    }
+
     ESP_LOGI(
         TAG,
-        "Firmware image available"
+        "Node firmware image loaded: %u bytes",
+        (unsigned int)image.size
+    );
+
+    /*
+     * Upload the firmware to the Node.
+     */
+    if (!ota_manager_upload(
+            image.data,
+            image.size,
+            ota_app_upload_progress,
+            NULL))
+    {
+        firmware_storage_release(&image);
+
+        ota_app_show_failure(
+            "OTA UPLOAD FAILED"
+        );
+
+        return;
+    }
+
+    /*
+     * Embedded image does not require dynamic
+     * memory cleanup, but release the descriptor
+     * through the storage interface.
+     */
+    firmware_storage_release(&image);
+
+    buzzer_success();
+
+    ESP_LOGI(
+        TAG,
+        "Node firmware upload completed"
     );
 
     ESP_LOGI(
         TAG,
         "OTA module ready"
     );
-
-    /*
-     * Firmware acquisition and OTA upload
-     * will be integrated after the firmware
-     * source is frozen.
-     */
 }
