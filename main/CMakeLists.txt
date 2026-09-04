@@ -21,4 +21,7 @@ idf_component_register(
         "wifi"
         "ota"
         "storage"
+
+    EMBED_FILES
+        "../firmware/node/orbdrive_firmware.bin"
 )
