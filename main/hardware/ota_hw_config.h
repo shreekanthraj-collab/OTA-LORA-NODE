@@ -21,12 +21,24 @@ extern "C" {
 /* ============================================================
  * OLED
  *
- * Provisional GPIO assignment.
- * Hardware pinout must be verified against the actual PCB.
+ * Initial hardware definition:
+ * Controller : SSD1306
+ * Resolution : 128 x 64
+ * Interface  : I2C
+ *
+ * GPIO assignment is provisional until PCB verification.
  * ============================================================ */
+
+#define OTA_OLED_CONTROLLER_SSD1306
+
+#define OTA_OLED_WIDTH           128U
+#define OTA_OLED_HEIGHT          64U
 
 #define OTA_GPIO_OLED_SDA        8
 #define OTA_GPIO_OLED_SCL        9
+
+#define OTA_OLED_I2C_ADDRESS     0x3CU
+#define OTA_OLED_I2C_FREQUENCY   400000U
 
 /* ============================================================
  * BUZZER
@@ -52,6 +64,7 @@ extern "C" {
  * RESET
  *
  * Hardware reset button is connected to ESP32-S3 EN.
+ * No GPIO software driver is required.
  * ============================================================ */
 
 /* ============================================================
