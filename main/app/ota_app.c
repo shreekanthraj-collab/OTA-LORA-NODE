@@ -9,6 +9,7 @@
 
 #include "buttons.h"
 #include "buzzer.h"
+#include "firmware_storage.h"
 #include "oled.h"
 #include "ota_manager.h"
 #include "wifi_manager.h"
@@ -25,6 +26,7 @@ static void ota_app_show_failure(
     );
 
     oled_show_failure(reason);
+    buzzer_error();
 }
 
 void ota_app_start(void)
@@ -94,15 +96,43 @@ void ota_app_start(void)
 
     oled_show_node_connected();
 
+    /*
+     * Firmware storage initialization.
+     */
+    if (!firmware_storage_init())
+    {
+        ota_app_show_failure(
+            "STORAGE INIT FAILED"
+        );
+
+        return;
+    }
+
+    /*
+     * Check whether a firmware image is available.
+     */
+    if (!firmware_storage_available())
+    {
+        ota_app_show_failure(
+            "FIRMWARE NOT FOUND"
+        );
+
+        return;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "Firmware image available"
+    );
+
     ESP_LOGI(
         TAG,
         "OTA module ready"
     );
 
     /*
-     * Firmware acquisition is intentionally not performed here.
-     *
-     * firmware_storage will provide the firmware image once
-     * the actual firmware source is frozen.
+     * Firmware acquisition and OTA upload
+     * will be integrated after the firmware
+     * source is frozen.
      */
 }
