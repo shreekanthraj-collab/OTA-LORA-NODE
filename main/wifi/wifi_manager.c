@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @file wifi_manager.c
  * @brief ORB DRIVE OTA module Wi-Fi station manager.
  */
@@ -54,15 +54,15 @@ static void wifi_event_handler(
     if (event_base == WIFI_EVENT)
     {
         switch (event_id)
-        {
-            case WIFI_EVENT_STA_START:
+        {            case WIFI_EVENT_STA_START:
                 ESP_LOGI(
                     TAG,
                     "Wi-Fi station started"
                 );
 
-                esp_wifi_connect();
+                /* Connection is started explicitly by wifi_manager_connect(). */
                 break;
+break;
 
             case WIFI_EVENT_STA_DISCONNECTED:
                 s_connected = false;
@@ -590,3 +590,5 @@ bool wifi_manager_node_reachable(void)
 
     return false;
 }
+
+
